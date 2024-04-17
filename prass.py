@@ -178,10 +178,17 @@ def sort_script(input_file, output_file, sort_by, descending):
               help="Max distance between a keyframe and event end for it to be snapped, when keyframe is placed before the end time")
 @click.option("--kf-after-end", default=0, type=float, metavar="<ms>",
               help="Max distance between a keyframe and event end for it to be snapped, when keyframe is placed after the event")
+@click.option("--cross-section-snap", default=0, type=int, metavar="<ms>",
+              help="How far to snap each top section start or end event to a bottom section event")
+@click.option("--cs-snap-right-cap", default=0, type=int, metavar="<ms>",
+              help="If an an8 or an2 event is unjoined on the end, extend the positive search to this amount")
+@click.option('--hidive', is_flag=True, default=False, 
+              help='For working with Hidive subtitles. Runs tpp on styles labeled with Caption in the name seperately and lowers kf_before_end on songs to min(kf_before_end, 250)')
 def tpp(input_file, output_file, styles, lead_in, lead_out, max_overlap, max_gap, adjacent_bias,
-        keyframes_path, timecodes_path, fps, kf_before_start, kf_after_start, kf_before_end, kf_after_end):
+        keyframes_path, timecodes_path, fps, kf_before_start, kf_after_start, kf_before_end, kf_after_end,
+        cross_section_snap, cs_snap_right_cap, hidive):
     """Timing post-processor.
-    It's a pretty straightforward port from Aegisub so you should be familiar with it.
+    Advanced fork with many fixes. Check github for explanations.
     You have to specify keyframes and timecodes (either as a CFR value or a timecodes file) if you want keyframe snapping.
     All parameters default to zero so if you don't want something - just don't put it in the command line.
 
@@ -210,13 +217,23 @@ def tpp(input_file, output_file, styles, lead_in, lead_out, max_overlap, max_gap
 
     keyframes_list = parse_keyframes(keyframes_path) if keyframes_path else None
 
+    if max_gap > kf_after_end + kf_before_end and (kf_after_end or kf_before_end):
+        print("WARNING: max_gap is higher than kf_after_end + kf_before_end, " +
+              "this means a line could be joined over a keyframe", file=sys.stderr)
+
+    if cs_snap_right_cap and not cross_section_snap:
+        raise PrassError('cross-section-snap value required to use very left or right')
+
     actual_styles = []
     for style in styles:
         actual_styles.extend(x.strip() for x in style.split(','))
-
+    
     script = AssScript.from_ass_stream(input_file)
+
     script.tpp(actual_styles, lead_in, lead_out, max_overlap, max_gap, adjacent_bias,
-               keyframes_list, timecodes, kf_before_start, kf_after_start, kf_before_end, kf_after_end)
+               keyframes_list, timecodes, kf_before_start, kf_after_start, kf_before_end, kf_after_end,
+               cross_section_snap, cs_snap_right_cap, hidive)
+    
     script.to_ass_stream(output_file)
 
 
@@ -309,3 +326,4 @@ if __name__ == '__main__':
             default_map[command] = {arg_name: '-'}
 
     cli(default_map=default_map)
+    

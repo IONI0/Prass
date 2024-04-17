@@ -1,5 +1,4 @@
 import codecs
-import os
 import bisect
 import re
 import copy
@@ -12,7 +11,6 @@ except:
 
 from tools import Timecodes
 from common import PrassError, zip, map, itervalues, iterkeys, iteritems, py2_unicode_compatible
-
 
 STYLES_SECTION = u"[V4+ Styles]"
 EVENTS_SECTION = u"[Events]"
@@ -43,8 +41,8 @@ def srt_line_to_ass(line, box=False):
             else:
                 logging.warning('Can\'t parse color "%s", please install webcolors module.' % color)
                 break
-            line = pre + '{\c&H%s%s%s&}' % (b, g, r) + post
-        line = line.replace('</font>', '{\c&HFFFFFF&}')
+            line = pre + '{\\c&H%s%s%s&}' % (b, g, r) + post
+        line = line.replace('</font>', r'{\\c&HFFFFFF&}')
     return line
 
 def format_time(ms):
@@ -414,7 +412,53 @@ class AssScript(object):
         self._events.sort(key=key, reverse=descending)
 
     def tpp(self, styles, lead_in, lead_out, max_overlap, max_gap, adjacent_bias,
-            keyframes_list, timecodes, kf_before_start, kf_after_start, kf_before_end, kf_after_end):
+            keyframes_list, timecodes, kf_before_start, kf_after_start, kf_before_end, kf_after_end, 
+            cross_section_snap, cs_snap_right_cap, hidive):
+        
+        ### Tools
+        
+        def get_events_type(type):
+            events_iter = (e for e in self._events if not e.is_comment)
+
+            if styles:
+                styles_lower = set(s.lower() for s in styles)
+                events_iter = (e for e in events_iter if e.style.lower() in styles_lower)
+
+            type_styles = []
+            if type == "hidive_signs":
+                if not hidive:
+                    return []
+                for style in self._styles:
+                    if "Caption" in self._styles[style].name:
+                        type_styles.append(self._styles[style].name)
+                filtered_events = (e for e in events_iter if not e.is_comment and e.style in type_styles)
+
+            elif type == "an2":
+                for style in self._styles:
+                    if self._styles[style].definition.split(",")[17] == "2":
+                        if hidive and "Caption" in self._styles[style].name:
+                            continue
+                        type_styles.append(self._styles[style].name)
+                filtered_events = (e for e in events_iter if not e.is_comment and \
+                    (e.style in type_styles or "\\an2" in e.text) and 
+                    ("\\an8" not in e.text))
+
+            elif type == "an8":
+                for style in self._styles:
+                    if self._styles[style].definition.split(",")[17] == "8":
+                        if hidive and "Caption" in self._styles[style].name:
+                            continue
+                        type_styles.append(self._styles[style].name)
+                filtered_events = (e for e in events_iter if not e.is_comment and \
+                    (e.style in type_styles or "\\an8" in e.text) and 
+                    ("\\an2" not in e.text))
+
+            events_list = sorted(filtered_events, key=lambda x: x.start)
+            broken = next((e for e in events_list if e.start > e.end), None)
+            if broken:
+                raise PrassError("One of the lines in the file ({0}) has negative duration. Aborting.".format(broken))
+
+            return events_list
 
         def get_closest_kf(frame, keyframes):
             idx = bisect.bisect_left(keyframes, frame)
@@ -423,65 +467,268 @@ class AssScript(object):
             if idx == 0 or keyframes[idx] - frame < frame - (keyframes[idx-1]):
                 return keyframes[idx]
             return keyframes[idx-1]
+        
+        def is_joined(event, op_events_set):
+            # To get if an event is joined to any other events either
+            # (event.end, start_events)
+            # (event.start, end_events)
+            return event in op_events_set
 
-        events_iter = (e for e in self._events if not e.is_comment)
-        if styles:
-            styles = set(s.lower() for s in styles)
-            events_iter = (e for e in events_iter if e.style.lower() in styles)
+        def would_snap_start(start_frame, end_frame, closest_frame, start_time, closest_time, end_events,
+                           kf_before_start, kf_after_start, kf_before_end):
+            # Snap start left
+            if (closest_frame <= start_frame and start_time - closest_time <= kf_before_start):
+                # Fix for near keyframe overlap (kf_before_end < kf_before_start)
+                mismatch_time = closest_time + kf_before_end
+                if (start_time > mismatch_time) and \
+                    any(mismatch_time <= end <= start_time for end in end_events):
+                    return False
+                else:
+                    return True
+            
+            # Snap start right
+            if (start_frame <= closest_frame < end_frame and closest_time - start_time <= kf_after_start):
+                return True
+            
+            return False
 
-        events_list = sorted(events_iter, key=lambda x: x.start)
-        broken = next((e for e in events_list if e.start > e.end), None)
-        if broken:
-            raise PrassError("One of the lines in the file ({0}) has negative duration. Aborting.".format(broken))
+        def would_snap_end(start_frame, end_frame, closest_frame, end_time, closest_time, start_events,
+                           kf_before_end, kf_after_end, kf_after_start):
+            # Snap end left
+            if (start_frame < closest_frame <= end_frame and end_time - closest_time <= kf_before_end):
+                return True
+            
+            # Snap end right
+            if (end_frame <= closest_frame and closest_time - end_time <= kf_after_end):
+            # Fix for near keyframe overlap (kf_before_end > kf_after_start)
+                mismatch_time = closest_time - kf_after_start
+                if (end_time < mismatch_time) and \
+                    any(end_time <= start <= mismatch_time for start in start_events):
+                    return False
+                else:
+                    return True
+                
+            return False
+        
+        def get_event_times(events, type):
+            if type == "Start":
+                return {e.start for e in events}
+            elif type == "End":
+                return {e.end for e in events}
+            elif type == "Both":
+                return {e.start for e in events} | {e.end for e in events}
+            
+            raise Exception
+                 
+        def search_pattern(negative, positive):
+            # for -20, 40 would be
+            # (0, -10, 10, -20, 20, 30, 40)
+            pattern = []
+            for i in range(0, max(abs(negative), positive) + 1, 10):
+                if i <= abs(negative) and i != 0:
+                    pattern.append(-i)
+                if i <= positive:
+                    pattern.append(i)
+            return pattern
+        
+        def is_on_keyframe(timestamp, keyframe_times):
+            idx = bisect.bisect_left(keyframe_times, timestamp)
 
-        if lead_in:
-            sorted_by_end = sorted(events_list, key=lambda x: x.end)
-            for idx, event in enumerate(sorted_by_end):
-                initial = max(event.start - lead_in, 0)
-                for other in reversed(sorted_by_end[:idx]):
-                    if other.end <= initial:
-                        break
-                    if not event.collides_with(other):
-                        initial = max(initial, other.end)
-                event.start = initial
+            if idx < len(keyframe_times) and abs(keyframe_times[idx] - timestamp) <= timecodes.default_frame_duration:
+                return True
+            else:
+                return False
+                  
+        ### TPP Functionality
 
-        if lead_out:
-            for idx, event in enumerate(events_list):
-                initial = event.end + lead_out
-                for other in events_list[idx:]:
-                    if other.start > initial:
-                        break
-                    if not event.collides_with(other):
-                        initial = min(initial, other.start)
-                event.end = initial
+        def lead_in_out(events):
+            if lead_in:
+                sorted_by_end = sorted(events, key=lambda x: x.end)
+                for idx, event in enumerate(sorted_by_end):
+                    initial = max(event.start - lead_in, 0)
+                    for other in reversed(sorted_by_end[:idx]):
+                        if other.end <= initial:
+                            break
+                        if not event.collides_with(other):
+                            initial = max(initial, other.end)
+                    event.start = initial
 
-        if max_overlap or max_gap:
+            if lead_out:
+                for idx, event in enumerate(events):
+                    initial = event.end + lead_out
+                    for other in events[idx:]:
+                        if other.start > initial:
+                            break
+                        if not event.collides_with(other):
+                            initial = min(initial, other.start)
+                    event.end = initial
+
+        def joining(events):
+            
+            def join_event(event, events, offset, bias):
+                new_time = event.end + (offset * bias)
+                for e in events:
+                    if e.start == (event.end + offset):
+                        e.start = new_time
+                event.end = new_time
+
+            if not (max_overlap or max_gap):
+                return
+            
             bias = adjacent_bias / 100.0
+            
+            offset_list = search_pattern(-max_overlap, max_gap)
+            
+            # Fix for joining over keyframes
+            if kf_before_start or kf_after_start or kf_before_end or kf_after_end:
+                for event in events:
+                    kf_before_end_copy = kf_before_end
+                    if hidive and "song" in event.style.lower(): # change snap for songs
+                        kf_before_end_copy = min(kf_before_end, 250)
 
-            for previous, current in zip(events_list, events_list[1:]):
-                distance = current.start - previous.end
-                if (distance < 0 and -distance <= max_overlap) or (distance > 0 and distance <= max_gap):
-                    new_time = previous.end + distance * bias
-                    current.start = new_time
-                    previous.end = new_time
+                    start_frame = timecodes.get_frame_number(event.start, timecodes.TIMESTAMP_START)
+                    end_frame = timecodes.get_frame_number(event.end, timecodes.TIMESTAMP_END)
 
-        if kf_before_start or kf_after_start or kf_before_end or kf_after_end:
-            for event in events_list:
+                    closest_frame = get_closest_kf(end_frame, keyframes_list) - 1
+                    closest_time = timecodes.get_frame_time(closest_frame, timecodes.TIMESTAMP_END)
+                    start_events = get_event_times(events, "Start")
+
+                    if not would_snap_end(start_frame, end_frame, closest_frame, event.end, closest_time, start_events,
+                                          kf_before_end_copy, kf_after_end, kf_after_start):
+                        for offset in offset_list:
+                            if (event.end + offset) in start_events:
+                                if offset == 0:
+                                    break
+                                join_event(event, events, offset, bias)
+                                break
+                    
+            else: # The standard method if no specified keyframe arguments
+                for event in events:
+                    start_events = get_event_times(events, "Start")
+                    for offset in offset_list:
+                        if (event.end + offset) in start_events:
+                            if offset == 0:
+                                break
+                            join_event(event, events, offset, bias)
+                            break
+
+        def keyframe_snapping(events):
+            if not (kf_before_start or kf_after_start or kf_before_end or kf_after_end):
+                return
+            
+            start_events = get_event_times(events, "Start")
+            end_events = get_event_times(events, "End")
+                
+            for event in events:
+                
+                kf_before_end_copy = kf_before_end
+                if hidive and "song" in event.style.lower(): # change snap for songs
+                    kf_before_end_copy = min(kf_before_end, 250)
+                    
                 start_frame = timecodes.get_frame_number(event.start, timecodes.TIMESTAMP_START)
                 end_frame = timecodes.get_frame_number(event.end, timecodes.TIMESTAMP_END)
 
                 closest_frame = get_closest_kf(start_frame, keyframes_list)
                 closest_time = timecodes.get_frame_time(closest_frame, timecodes.TIMESTAMP_START)
 
-                if (end_frame > closest_frame >= start_frame and closest_time - event.start <= kf_after_start) or \
-                        (closest_frame <= start_frame and event.start - closest_time <= kf_before_start):
+                if would_snap_start(start_frame, end_frame, closest_frame, event.start, closest_time, end_events,
+                                  kf_before_start, kf_after_start, kf_before_end_copy):
                     event.start = max(0, closest_time)
+
 
                 closest_frame = get_closest_kf(end_frame, keyframes_list) - 1
                 closest_time = timecodes.get_frame_time(closest_frame, timecodes.TIMESTAMP_END)
-                if (start_frame < closest_frame <= end_frame and event.end - closest_time <= kf_before_end) or \
-                        (closest_frame >= end_frame and closest_time - event.end <= kf_after_end):
+                if would_snap_end(start_frame, end_frame, closest_frame, event.end, closest_time, start_events,
+                                  kf_before_end_copy, kf_after_end, kf_after_start):
+                    
                     event.end = closest_time
+
+        def apply_cross_section_snap():
+            if not cross_section_snap:
+                return
+
+            # an2 very end to an8 start situations
+            an2_start_events = get_event_times(get_events_type("an2"), "Start")
+            an8_start_events = get_event_times(get_events_type("an8"), "Start")
+            an2_events = get_events_type("an2")
+            if cs_snap_right_cap:
+                positive = cs_snap_right_cap
+            else:
+                positive = cross_section_snap
+            if lead_out:
+                negative = -lead_out
+            else:
+                negative = -cross_section_snap
+
+            offset_list = search_pattern(negative, positive)
+            for event in an2_events:
+                if not is_on_keyframe(event.end, keyframe_times) and not is_joined(event.end, an2_start_events):
+                    for offset in offset_list:
+                        if event.end + offset in an8_start_events:
+                            event.end = event.end + offset
+                            break
+
+            # an8 general situations
+            an2_event_times = get_event_times(get_events_type("an2"), "Both")
+            an8_events = get_events_type("an8")
+            offset_list = search_pattern(-cross_section_snap, cross_section_snap)  
+                        
+            for event in an8_events:
+                for offset in offset_list:
+                    if event.start + offset in an2_event_times:
+                        event.start = event.start + offset
+                        break    
+
+                for offset in offset_list:
+                    if event.end + offset in an2_event_times:
+                        event.end = event.end + offset
+                        break
+
+            # Extend search ranges if end event not joined    
+            if cs_snap_right_cap:
+                # Snap an8 lines at the end that are not joined by very_right search amount
+                an8_start_events = get_event_times(get_events_type("an8"), "Start")
+                an8_events = get_events_type("an8")
+                
+                for event in an8_events:
+                    if not is_on_keyframe(event.end, keyframe_times) and not is_joined(event.end, an8_start_events):
+                        offset_list = search_pattern(-cross_section_snap, cs_snap_right_cap)
+                        for offset in offset_list:
+                            if event.end + offset in an2_event_times:
+                                event.end = event.end + offset
+                                break
+                            
+                # Snap an2 lines at the very end to an8 
+                an2_start_events = get_event_times(get_events_type("an2"), "Start")
+                an2_events = get_events_type("an2")
+                an8_event_times = get_event_times(get_events_type("an8"), "Both")
+                
+                for event in an2_events:
+                    if not is_on_keyframe(event.end, keyframe_times) and not is_joined(event.end, an2_start_events):
+                        offset_list = search_pattern(-cross_section_snap, cs_snap_right_cap)
+                        for offset in offset_list:
+                            if event.end + offset in an8_event_times:
+                                event.end = event.end + offset
+                                break
+
+        ### Setup                  
+
+        if keyframes_list:
+            keyframe_times = [timecodes.get_frame_time(keyframe) for keyframe in keyframes_list]
+
+        ### Applying
+        
+        for event_type in ["an2", "an8", "hidive_signs"]:
+            events = get_events_type(event_type)
+            if event_type != "hidive_signs":
+                lead_in_out(events)
+            joining(events)
+            keyframe_snapping(events)
+        
+        apply_cross_section_snap()
+
+        return
+
 
     def cleanup(self, drop_comments, drop_empty_lines, drop_unused_styles, drop_actors, drop_effects, drop_spacing, drop_sections):
         if drop_comments:

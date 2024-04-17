@@ -7,11 +7,21 @@ def parse_scxvid_keyframes(text):
     return [i-3 for i,line in enumerate(text.splitlines()) if line and line[0] == 'i']
 
 
+def parse_v1_keyframes(text):
+    try:
+        kf = [int(line) for i,line in enumerate(text.splitlines()) if line and i > 1]
+    except Exception:
+        raise PrassError('Invalid keyframe v1 file, it does not follow expected structure')
+    return kf
+
+
 def parse_keyframes(path):
     with open(path) as file_object:
         text = file_object.read()
     if text.find('# XviD 2pass stat file')>=0:
         frames = parse_scxvid_keyframes(text)
+    elif text.find('# keyframe format v1')>=0:
+        frames = parse_v1_keyframes(text)
     else:
         raise PrassError('Unsupported keyframes type')
     if 0 not in frames:
