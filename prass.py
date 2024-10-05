@@ -156,6 +156,8 @@ def sort_script(input_file, output_file, sort_by, descending):
               help="Lead-in value in milliseconds")
 @click.option("--lead-out", "lead_out", default=0, type=int, metavar="<ms>",
               help="Lead-out value in milliseconds")
+@click.option("--smart-lead-out", "smart_lead_out", default=0, type=int, metavar="<ms>",
+              help="Smart lead-out value in milliseconds, don't add more lead-out if it hits a keyframe")
 @click.option("--overlap", "max_overlap", default=0, type=int, metavar="<ms>",
               help="Maximum overlap for two lines to be made continuous, in milliseconds")
 @click.option("--gap", "max_gap", default=0, type=int, metavar="<ms>",
@@ -182,9 +184,9 @@ def sort_script(input_file, output_file, sort_by, descending):
               help="How far to snap each top section start or end event to a bottom section event")
 @click.option("--cs-snap-right-cap", default=0, type=int, metavar="<ms>",
               help="If an an8 or an2 event is unjoined on the end, extend the positive search to this amount")
-@click.option('--hidive', is_flag=True, default=False, 
+@click.option('--hidive', is_flag=True, default=False,
               help='For working with Hidive subtitles. Runs tpp on styles labeled with Caption in the name seperately and lowers kf_before_end on songs to min(kf_before_end, 250)')
-def tpp(input_file, output_file, styles, lead_in, lead_out, max_overlap, max_gap, adjacent_bias,
+def tpp(input_file, output_file, styles, lead_in, lead_out, smart_lead_out, max_overlap, max_gap, adjacent_bias,
         keyframes_path, timecodes_path, fps, kf_before_start, kf_after_start, kf_before_end, kf_after_end,
         cross_section_snap, cs_snap_right_cap, hidive):
     """Timing post-processor.
@@ -221,19 +223,25 @@ def tpp(input_file, output_file, styles, lead_in, lead_out, max_overlap, max_gap
         print("WARNING: max_gap is higher than kf_after_end + kf_before_end, " +
               "this means a line could be joined over a keyframe", file=sys.stderr)
 
+    if smart_lead_out and not keyframes_path:
+        raise PrassError('smart-lead-out needs keyframes')
+
+    if smart_lead_out and lead_out:
+        raise PrassError('cannot have both smart-lead-out and lead-out at the same time')
+
     if cs_snap_right_cap and not cross_section_snap:
         raise PrassError('cross-section-snap value required to use very left or right')
 
     actual_styles = []
     for style in styles:
         actual_styles.extend(x.strip() for x in style.split(','))
-    
+
     script = AssScript.from_ass_stream(input_file)
 
-    script.tpp(actual_styles, lead_in, lead_out, max_overlap, max_gap, adjacent_bias,
+    script.tpp(actual_styles, lead_in, lead_out, smart_lead_out, max_overlap, max_gap, adjacent_bias,
                keyframes_list, timecodes, kf_before_start, kf_after_start, kf_before_end, kf_after_end,
                cross_section_snap, cs_snap_right_cap, hidive)
-    
+
     script.to_ass_stream(output_file)
 
 
@@ -282,7 +290,7 @@ def cleanup(input_file, output_file, drop_comments, drop_empty_lines, drop_unuse
               help="Time to shift. Might be negative. 10.5s, 150ms or 1:12.23 formats are allowed, seconds assumed by default")
 @click.option("--start", "shift_start", default=False, is_flag=True, help="Shift only start time")
 @click.option("--end", "shift_end", default=False, is_flag=True, help="Shift only end time")
-@click.option("--multiplier", "multiplier", default="1", 
+@click.option("--multiplier", "multiplier", default="1",
               help="Multiplies timings by the value to change speed. Value is a decimal or proper fraction")
 def shift(input_file, output_file, shift_by, shift_start, shift_end, multiplier):
     """Shift all lines in a script by defined amount and/or change speed.
@@ -326,4 +334,3 @@ if __name__ == '__main__':
             default_map[command] = {arg_name: '-'}
 
     cli(default_map=default_map)
-    

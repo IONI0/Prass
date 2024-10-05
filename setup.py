@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='Prass',
-    version='1.0',
+    version='1.1',
     py_modules=['prass', 'common', 'subs', 'tools'],
     install_requires=['Click'],
     entry_points='''

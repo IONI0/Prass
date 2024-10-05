@@ -379,7 +379,7 @@ class AssScript(object):
     def to_ass_file(self, path):
         with codecs.open(path, encoding='utf-8-sig', mode='w') as script:
             self.to_ass_stream(script)
-    
+
     def scale_to_reference(self, reference, forced_resolution=None):
         src_width, src_height = self._find_section(SCRIPT_INFO_SECTION).get_resolution()
         scale_border_and_shadow = self._find_section(SCRIPT_INFO_SECTION).get_scaled_border_property()
@@ -393,7 +393,7 @@ class AssScript(object):
             self._find_section(SCRIPT_INFO_SECTION).set_resolution(dst_width, dst_height)
         else:
             logging.info("Couldn't determine resolution, resampling disabled")
-    
+
     def append_styles(self, other_script, clean, resample, forced_resolution=None):
         if clean:
             self._styles.clear()
@@ -411,12 +411,12 @@ class AssScript(object):
     def sort_events(self, key, descending):
         self._events.sort(key=key, reverse=descending)
 
-    def tpp(self, styles, lead_in, lead_out, max_overlap, max_gap, adjacent_bias,
-            keyframes_list, timecodes, kf_before_start, kf_after_start, kf_before_end, kf_after_end, 
+    def tpp(self, styles, lead_in, lead_out, smart_lead_out, max_overlap, max_gap, adjacent_bias,
+            keyframes_list, timecodes, kf_before_start, kf_after_start, kf_before_end, kf_after_end,
             cross_section_snap, cs_snap_right_cap, hidive):
-        
+
         ### Tools
-        
+
         def get_events_type(type):
             events_iter = (e for e in self._events if not e.is_comment)
 
@@ -440,7 +440,7 @@ class AssScript(object):
                             continue
                         type_styles.append(self._styles[style].name)
                 filtered_events = (e for e in events_iter if not e.is_comment and \
-                    (e.style in type_styles or "\\an2" in e.text) and 
+                    (e.style in type_styles or "\\an2" in e.text) and
                     ("\\an8" not in e.text))
 
             elif type == "an8":
@@ -450,7 +450,7 @@ class AssScript(object):
                             continue
                         type_styles.append(self._styles[style].name)
                 filtered_events = (e for e in events_iter if not e.is_comment and \
-                    (e.style in type_styles or "\\an8" in e.text) and 
+                    (e.style in type_styles or "\\an8" in e.text) and
                     ("\\an2" not in e.text))
 
             events_list = sorted(filtered_events, key=lambda x: x.start)
@@ -467,7 +467,7 @@ class AssScript(object):
             if idx == 0 or keyframes[idx] - frame < frame - (keyframes[idx-1]):
                 return keyframes[idx]
             return keyframes[idx-1]
-        
+
         def is_joined(event, op_events_set):
             # To get if an event is joined to any other events either
             # (event.end, start_events)
@@ -485,11 +485,11 @@ class AssScript(object):
                     return False
                 else:
                     return True
-            
+
             # Snap start right
             if (start_frame <= closest_frame < end_frame and closest_time - start_time <= kf_after_start):
                 return True
-            
+
             return False
 
         def would_snap_end(start_frame, end_frame, closest_frame, end_time, closest_time, start_events,
@@ -497,7 +497,7 @@ class AssScript(object):
             # Snap end left
             if (start_frame < closest_frame <= end_frame and end_time - closest_time <= kf_before_end):
                 return True
-            
+
             # Snap end right
             if (end_frame <= closest_frame and closest_time - end_time <= kf_after_end):
             # Fix for near keyframe overlap (kf_before_end > kf_after_start)
@@ -507,9 +507,9 @@ class AssScript(object):
                     return False
                 else:
                     return True
-                
+
             return False
-        
+
         def get_event_times(events, type):
             if type == "Start":
                 return {e.start for e in events}
@@ -517,9 +517,9 @@ class AssScript(object):
                 return {e.end for e in events}
             elif type == "Both":
                 return {e.start for e in events} | {e.end for e in events}
-            
+
             raise Exception
-                 
+
         def search_pattern(negative, positive):
             # for -20, 40 would be
             # (0, -10, 10, -20, 20, 30, 40)
@@ -530,7 +530,7 @@ class AssScript(object):
                 if i <= positive:
                     pattern.append(i)
             return pattern
-        
+
         def is_on_keyframe(timestamp, keyframe_times):
             idx = bisect.bisect_left(keyframe_times, timestamp)
 
@@ -538,7 +538,7 @@ class AssScript(object):
                 return True
             else:
                 return False
-                  
+
         ### TPP Functionality
 
         def lead_in_out(events):
@@ -563,8 +563,31 @@ class AssScript(object):
                             initial = min(initial, other.start)
                     event.end = initial
 
+            if smart_lead_out:
+                for idx, event in enumerate(events):
+                    # Smart lead_out
+                    init_frame = timecodes.get_frame_number(event.end, timecodes.TIMESTAMP_END)
+                    lead_out_frame = timecodes.get_frame_number(event.end + smart_lead_out, timecodes.TIMESTAMP_END)
+                    continue_flag = False
+                    for frame in range (init_frame, lead_out_frame + 1):
+                        if frame in keyframes_list:
+                            event.end = timecodes.get_frame_time(frame, timecodes.TIMESTAMP_END)
+                            continue_flag = True
+                            break
+                    if continue_flag:
+                        continue
+                    # Normal
+                    initial = event.end + smart_lead_out
+                    for other in events[idx:]:
+                        if other.start > initial:
+                            break
+                        if not event.collides_with(other):
+                            initial = min(initial, other.start)
+                    event.end = initial
+
+
         def joining(events):
-            
+
             def join_event(event, events, offset, bias):
                 new_time = event.end + (offset * bias)
                 for e in events:
@@ -574,11 +597,11 @@ class AssScript(object):
 
             if not (max_overlap or max_gap):
                 return
-            
+
             bias = adjacent_bias / 100.0
-            
+
             offset_list = search_pattern(-max_overlap, max_gap)
-            
+
             # Fix for joining over keyframes
             if kf_before_start or kf_after_start or kf_before_end or kf_after_end:
                 for event in events:
@@ -601,7 +624,7 @@ class AssScript(object):
                                     break
                                 join_event(event, events, offset, bias)
                                 break
-                    
+
             else: # The standard method if no specified keyframe arguments
                 for event in events:
                     start_events = get_event_times(events, "Start")
@@ -615,16 +638,16 @@ class AssScript(object):
         def keyframe_snapping(events):
             if not (kf_before_start or kf_after_start or kf_before_end or kf_after_end):
                 return
-            
+
             start_events = get_event_times(events, "Start")
             end_events = get_event_times(events, "End")
-                
+
             for event in events:
-                
+
                 kf_before_end_copy = kf_before_end
                 if hidive and "song" in event.style.lower(): # change snap for songs
                     kf_before_end_copy = min(kf_before_end, 250)
-                    
+
                 start_frame = timecodes.get_frame_number(event.start, timecodes.TIMESTAMP_START)
                 end_frame = timecodes.get_frame_number(event.end, timecodes.TIMESTAMP_END)
 
@@ -640,7 +663,7 @@ class AssScript(object):
                 closest_time = timecodes.get_frame_time(closest_frame, timecodes.TIMESTAMP_END)
                 if would_snap_end(start_frame, end_frame, closest_frame, event.end, closest_time, start_events,
                                   kf_before_end_copy, kf_after_end, kf_after_start):
-                    
+
                     event.end = closest_time
 
         def apply_cross_section_snap():
@@ -671,25 +694,25 @@ class AssScript(object):
             # an8 general situations
             an2_event_times = get_event_times(get_events_type("an2"), "Both")
             an8_events = get_events_type("an8")
-            offset_list = search_pattern(-cross_section_snap, cross_section_snap)  
-                        
+            offset_list = search_pattern(-cross_section_snap, cross_section_snap)
+
             for event in an8_events:
                 for offset in offset_list:
                     if event.start + offset in an2_event_times:
                         event.start = event.start + offset
-                        break    
+                        break
 
                 for offset in offset_list:
                     if event.end + offset in an2_event_times:
                         event.end = event.end + offset
                         break
 
-            # Extend search ranges if end event not joined    
+            # Extend search ranges if end event not joined
             if cs_snap_right_cap:
                 # Snap an8 lines at the end that are not joined by very_right search amount
                 an8_start_events = get_event_times(get_events_type("an8"), "Start")
                 an8_events = get_events_type("an8")
-                
+
                 for event in an8_events:
                     if not is_on_keyframe(event.end, keyframe_times) and not is_joined(event.end, an8_start_events):
                         offset_list = search_pattern(-cross_section_snap, cs_snap_right_cap)
@@ -697,12 +720,12 @@ class AssScript(object):
                             if event.end + offset in an2_event_times:
                                 event.end = event.end + offset
                                 break
-                            
-                # Snap an2 lines at the very end to an8 
+
+                # Snap an2 lines at the very end to an8
                 an2_start_events = get_event_times(get_events_type("an2"), "Start")
                 an2_events = get_events_type("an2")
                 an8_event_times = get_event_times(get_events_type("an8"), "Both")
-                
+
                 for event in an2_events:
                     if not is_on_keyframe(event.end, keyframe_times) and not is_joined(event.end, an2_start_events):
                         offset_list = search_pattern(-cross_section_snap, cs_snap_right_cap)
@@ -711,20 +734,20 @@ class AssScript(object):
                                 event.end = event.end + offset
                                 break
 
-        ### Setup                  
+        ### Setup
 
         if keyframes_list:
             keyframe_times = [timecodes.get_frame_time(keyframe) for keyframe in keyframes_list]
 
         ### Applying
-        
+
         for event_type in ["an2", "an8", "hidive_signs"]:
             events = get_events_type(event_type)
             if event_type != "hidive_signs":
                 lead_in_out(events)
             joining(events)
             keyframe_snapping(events)
-        
+
         apply_cross_section_snap()
 
         return

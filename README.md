@@ -34,6 +34,8 @@ Options:
                              to separate, or supply it multiple times
   --lead-in <ms>             Lead-in value in milliseconds
   --lead-out <ms>            Lead-out value in milliseconds
+  --smart-lead-out <ms>      Smart lead-out value in milliseconds, don't add
+                             more lead-out if it hits a keyframe
   --overlap <ms>             Maximum overlap for two lines to be made
                              continuous, in milliseconds
   --gap <ms>                 Maximum gap between two lines to be made
@@ -71,7 +73,7 @@ Options:
 
 My settings for Hidive scripts:
 ```console
-$ python prass.py tpp "$ass_file" --hidive --lead-in 0 --lead-out 200 --gap 450 --overlap 126 --bias 100 --keyframes "$kf_file" --fps "$fps" --kf-before-start 250 --kf-after-start 250 --kf-before-end 450 --kf-after-end 450 --cross-section-snap 200 --cs-snap-right-cap 350 -o "$out_file"
+$ python prass.py tpp "$ass_file" --hidive --lead-in 0 --smart-lead-out 200 --gap 450 --overlap 300 --bias 100 --keyframes "$kf_file" --fps "$fps" --kf-before-start 250 --kf-after-start 250 --kf-before-end 450 --kf-after-end 450 --cross-section-snap 200 --cs-snap-right-cap 350 -o "$out_file"
 ```
 
 ### Installation
@@ -85,26 +87,32 @@ pip install git+https://github.com/IONI0/prass
 ### Explanation
 Here's an explanation for each of the issues I've fixed so that you can understand why they occur if you've ever experienced them using TPP. Since Prass merely ported Aegisub's implementation, all of these issues should be present there as well. If you want further clarification then don't hesitate to contact me on [discord](https://discord.gg/8v9GBnjdsY).
 
+---
+
 #### Sequential Joining Logic
 Vanila TPP's joining logic takes lines chronologically by start time and only joins to the next line in sequence. This is a problem for any instance where lines do not only start after the last one ends. For example, if two events start and end at the same time, only one of them will join to the next line. Here's what it would be like on vanilla tpp:
 
 ```
 0:00:00.00,0:00:05.00,Line 1      -> 0:00:00.00,0:00:05.00,Line 1
-0:00:00.00,0:00:05.00,Line 2      -> 0:00:00.00,0:00:05.20,Line 2 
-0:00:05.20,0:00:05.00,Join to me! -> 0:00:05.20,0:00:05.00,Join to me!
+0:00:00.00,0:00:05.00,Line 2      -> 0:00:00.00,0:00:05.20,Line 2
+0:00:05.20,0:00:10.00,Join to me! -> 0:00:05.20,0:00:10.00,Join to me!
 ```
 
 Another example is that when there are multiple speakers, joining becomes very inconsistent.
 
 This fork solves this by making the max_gap and max_overlap joining logic check based on time rather than sequentially.
 
+---
+
 #### Joining Over Keyframe
 Since joining is ran before snapping, it is possible for a line near a keyframe to be joined right to another line and escape the kf_snap distance. This is usually not ideal since you would generally prefer for a line to be snapped if it is within distance.
 
 This fork solves this by checking if a line will be snapped to a keyframe and doesn't join if it will.
 
+---
+
 #### Bias Shenanigans
-Because joining is done before snapping, a line can get joined and then with the applied bias it will adjust the start time of the next line, this is intended. But the problem is that if the end of the line that just joined then gets snapped back but the start of the other line doesn't, bias has then been applied to the other line even though it isn't joined in the end. 
+Because joining is done before snapping, a line can get joined and then with the applied bias it will adjust the start time of the next line, this is intended. But the problem is that if the end of the line that just joined then gets snapped back but the start of the other line doesn't, bias has then been applied to the other line even though it isn't joined in the end.
 
 ```
 Keyframe at 0:00:05.00
@@ -120,10 +128,14 @@ Another thing is that the bias applied could also bring a line that would otherw
 
 This fork solves this using the same fix as the last issue.
 
+---
+
 #### Multiple Sections
 Lines that are on the bottom and top track using alignment 2 and 8 are usually different speakers or has a song. Vanilla TPP gets very confused if they are both ran at the same time due to joining being done sequentially. By running them through tpp separately, and with the new joining logic, this allows them to not interfere with the other track. A cross-section-snap can then be applied to simulate how a timer might want lines start and end at the same time if they are close enough to reduce visual burden.
 
-Since the bottom track is usually the main track. `cross-section-snap` works by snapping the top track start or end time to the bottom track by the ms set. Additionally, `cs-snap-right-cap` can be used to extend the snapping range of the end times for both bottom and top events farther. Bottom and top tracks are identified by either the style definition or `\an2 \an8` tags. 
+Since the bottom track is usually the main track. `cross-section-snap` works by snapping the top track start or end time to the bottom track by the ms set. Additionally, `cs-snap-right-cap` can be used to extend the snapping range of the end times for both bottom and top events farther. Bottom and top tracks are identified by either the style definition or `\an2 \an8` tags.
+
+---
 
 #### Overlap Near Keyframe
 Keyframe snapping can create overlaps if two lines start and end near a keyframe. Normally if the two lines are close enough to the keyframe then they would both snap. If the two lines are far enough from the keyframe then they would both not snap. But if they are at a middle distance away where the settings only allow one of the them to snap, then this creates the overlap.
@@ -149,6 +161,8 @@ kf_before_end = 200ms
 ```
 
 This fork solves this by detecting if line that is about to snap is in this middle distance away and whether it is joined to another line that won't snap. It then skips snapping if it would have created an overlap.
+
+---
 
 #### Keyframe Format v1 Support
 Support for keyframes is in this form:
