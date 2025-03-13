@@ -524,7 +524,9 @@ class AssScript(object):
             # for -20, 40 would be
             # (0, -10, 10, -20, 20, 30, 40)
             if (lead_in % 10 != 0) or (lead_out % 10 != 0) or (smart_lead_out % 10 != 0):
-                search_step = 1 # So that joining can work with milliseconds
+                search_step = 1 # So that joining can work with miliseconds
+            elif adjacent_bias != 100 or adjacent_bias != 0:
+                search_step = 1
             else:
                 search_step = 10
 
