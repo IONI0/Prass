@@ -157,7 +157,7 @@ def sort_script(input_file, output_file, sort_by, descending):
 @click.option("--lead-out", "lead_out", default=0, type=int, metavar="<ms>",
               help="Lead-out value in milliseconds")
 @click.option("--smart-lead-out", "smart_lead_out", default=0, type=int, metavar="<ms>",
-              help="Smart lead-out value in milliseconds, don't add more lead-out if it hits a keyframe")
+              help="Smart lead-out value in milliseconds. Makes it so that it doesn't add more lead-out if it hits a keyframe")
 @click.option("--overlap", "max_overlap", default=0, type=int, metavar="<ms>",
               help="Maximum overlap for two lines to be made continuous, in milliseconds")
 @click.option("--gap", "max_gap", default=0, type=int, metavar="<ms>",

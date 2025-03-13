@@ -34,8 +34,9 @@ Options:
                              to separate, or supply it multiple times
   --lead-in <ms>             Lead-in value in milliseconds
   --lead-out <ms>            Lead-out value in milliseconds
-  --smart-lead-out <ms>      Smart lead-out value in milliseconds, don't add
-                             more lead-out if it hits a keyframe
+  --smart-lead-out <ms>      Smart lead-out value in milliseconds, Makes it so
+                             that it doesn't add more lead-out if it hits a
+                             keyframe
   --overlap <ms>             Maximum overlap for two lines to be made
                              continuous, in milliseconds
   --gap <ms>                 Maximum gap between two lines to be made
@@ -75,6 +76,8 @@ My settings for Hidive scripts:
 ```console
 $ python prass.py tpp "$ass_file" --hidive --lead-in 0 --smart-lead-out 200 --gap 450 --overlap 300 --bias 100 --keyframes "$kf_file" --fps "$fps" --kf-before-start 250 --kf-after-start 250 --kf-before-end 450 --kf-after-end 450 --cross-section-snap 200 --cs-snap-right-cap 350 -o "$out_file"
 ```
+
+Values are recommended to be rounded to the nearest 10s.
 
 ### Installation
 Prass should work on OS X, Linux and Windows without any problems. Prass was originally made for Python 2 but this fork has only been tested for Python 3. The only dependency is [Click](http://click.pocoo.org/3/). Assuming you have python and pip, just run:

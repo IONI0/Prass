@@ -523,8 +523,13 @@ class AssScript(object):
         def search_pattern(negative, positive):
             # for -20, 40 would be
             # (0, -10, 10, -20, 20, 30, 40)
+            if (lead_in % 10 != 0) or (lead_out % 10 != 0) or (smart_lead_out % 10 != 0):
+                search_step = 1 # So that joining can work with milliseconds
+            else:
+                search_step = 10
+
             pattern = []
-            for i in range(0, max(abs(negative), positive) + 1, 10):
+            for i in range(0, max(abs(negative), positive) + 1, search_step):
                 if i <= abs(negative) and i != 0:
                     pattern.append(-i)
                 if i <= positive:
